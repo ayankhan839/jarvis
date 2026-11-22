@@ -149,13 +149,21 @@ class JarvisEngine(private val ctx: Context, private val say: (String) -> Unit) 
         say("Calling $fullName.")
     }
 
+    private fun norm(s: String) = s.lowercase().filter { it.isLetterOrDigit() }
+
+    private val appAliases = mapOf(
+        "insta" to "instagram", "yt" to "youtube", "fb" to "facebook",
+        "gpay" to "googlepay", "maps" to "maps", "mail" to "gmail", "camera" to "camera"
+    )
+
     private fun openApp(appName: String) {
         val pm = ctx.packageManager
         val main = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        val match = pm.queryIntentActivities(main, 0).firstOrNull { it.loadLabel(pm).toString().contains(appName, true) }
+        val wanted = norm(appName).let { appAliases[it] ?: it }   // "playstore" matches "Play Store"
+        val match = pm.queryIntentActivities(main, 0).firstOrNull { norm(it.loadLabel(pm).toString()).contains(wanted) }
         val intent = match?.let { pm.getLaunchIntentForPackage(it.activityInfo.packageName) }
         if (intent != null) { launch(intent); say("Opening ${match.loadLabel(pm)}.") }
-        else say("I couldn't find an app called $appName.")
+        else say("I couldn't find an app called $appName on this phone.")
     }
 
     private fun setAlarm(h: Int, m: Int) {
