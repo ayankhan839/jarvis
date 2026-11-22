@@ -6,11 +6,17 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.tts.TextToSpeech
 import android.view.Gravity
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.inputmethod.EditorInfo
+import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import java.util.Locale
@@ -19,8 +25,9 @@ import java.util.Locale
 data class Step(val labels: List<String>, val exact: Boolean = false, val viewIdSuffix: String? = null)
 
 /**
- * Jarvis' "hands". Gives Jarvis a floating "J" button over every app, and lets it
- * tap, type and scroll in ANY app. It only acts when YOU give a voice command.
+ * Jarvis' "hands". Shows two floating buttons over every app:
+ *   J  = speak a command      KB = type a command
+ * It only acts when YOU give a command.
  */
 class JarvisAccessibilityService : AccessibilityService() {
 
@@ -35,41 +42,98 @@ class JarvisAccessibilityService : AccessibilityService() {
     }
 
     private var tts: TextToSpeech? = null
-    private var bubble: TextView? = null
+    private var engine: JarvisEngine? = null
     private var listener: VoiceListener? = null
+    private var voiceBubble: TextView? = null
+    private var typeBubble: TextView? = null
+    private var panel: LinearLayout? = null
+
+    private val wm get() = getSystemService(WINDOW_SERVICE) as WindowManager
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     override fun onServiceConnected() {
         instance = this
         tts = TextToSpeech(this) { if (it == TextToSpeech.SUCCESS) tts?.language = Locale.getDefault() }
-        val engine = JarvisEngine(this) { msg ->
+        engine = JarvisEngine(this) { msg ->
             Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
             tts?.speak(msg, TextToSpeech.QUEUE_FLUSH, null, "jarvis")
         }
-        listener = VoiceListener(this, onText = { engine.handle(it) }, onStatus = {
+        listener = VoiceListener(this, onText = { engine?.handle(it) }, onStatus = {
             Toast.makeText(this, it, Toast.LENGTH_SHORT).show()
         })
-        showBubble()
+        voiceBubble = addBubble("J", 0) { listener?.start() }
+        typeBubble = addBubble("KB", 64) { showTypePanel() }
     }
 
-    private fun showBubble() {
-        val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+    private fun addBubble(label: String, yOffsetDp: Int, onClick: () -> Unit): TextView {
         val btn = TextView(this).apply {
-            text = "J"
-            textSize = 22f
+            text = label
+            textSize = if (label.length > 1) 16f else 22f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
             background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0xCC1565C0.toInt()) }
-            setOnClickListener { listener?.start() }
+            setOnClickListener { onClick() }
         }
-        val size = (56 * resources.displayMetrics.density).toInt()
         val lp = WindowManager.LayoutParams(
-            size, size,
+            dp(56), dp(56),
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
             PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.END or Gravity.CENTER_VERTICAL }
+        ).apply { gravity = Gravity.END or Gravity.CENTER_VERTICAL; y = dp(yOffsetDp) }
         wm.addView(btn, lp)
-        bubble = btn
+        return btn
+    }
+
+    // ---------- typed command box ----------
+    private fun showTypePanel() {
+        if (panel != null) return
+        val input = EditText(this).apply {
+            hint = "Type a command, e.g. open YouTube"
+            setSingleLine()
+            imeOptions = EditorInfo.IME_ACTION_GO
+            setTextColor(Color.BLACK)
+            setHintTextColor(Color.GRAY)
+        }
+        val go = Button(this).apply { text = "Go" }
+        val close = Button(this).apply { text = "X" }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(Color.WHITE)
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            addView(input, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(go)
+            addView(close)
+        }
+        fun submit() {
+            val text = input.text.toString().trim()
+            hidePanel()
+            // small delay so the app underneath becomes active again before Jarvis acts
+            if (text.isNotEmpty()) Handler(Looper.getMainLooper()).postDelayed({ engine?.handle(text) }, 400)
+        }
+        go.setOnClickListener { submit() }
+        close.setOnClickListener { hidePanel() }
+        input.setOnEditorActionListener { _, _, _ -> submit(); true }
+
+        val lp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            0,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.BOTTOM
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or
+                    WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE
+        }
+        wm.addView(row, lp)
+        panel = row
+        input.requestFocus()
+    }
+
+    private fun hidePanel() {
+        panel?.let { try { wm.removeView(it) } catch (e: Exception) {} }
+        panel = null
     }
 
     // ---------- auto steps (used for "send" in chat apps) ----------
@@ -82,7 +146,7 @@ class JarvisAccessibilityService : AccessibilityService() {
         if (clickNodeOrParent(node)) steps = list.drop(1)
     }
 
-    // ---------- direct voice actions ----------
+    // ---------- direct actions ----------
     fun clickLabel(label: String): Boolean {
         val root = rootInActiveWindow ?: return false
         val node = findNode(root, Step(listOf(label))) ?: return false
@@ -145,7 +209,9 @@ class JarvisAccessibilityService : AccessibilityService() {
 
     override fun onUnbind(intent: Intent?): Boolean {
         instance = null
-        bubble?.let { (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(it) }
+        hidePanel()
+        voiceBubble?.let { try { wm.removeView(it) } catch (e: Exception) {} }
+        typeBubble?.let { try { wm.removeView(it) } catch (e: Exception) {} }
         listener?.destroy()
         tts?.shutdown()
         return super.onUnbind(intent)
