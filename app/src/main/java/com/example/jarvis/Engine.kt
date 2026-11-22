@@ -31,13 +31,14 @@ class VoiceListener(
             return
         }
         rec?.destroy()
+        if (!SpeechRecognizer.isRecognitionAvailable(ctx)) { onStatus("No speech service on this phone. Install or enable the Google app."); return }
         rec = SpeechRecognizer.createSpeechRecognizer(ctx).apply {
             setRecognitionListener(object : RecognitionListener {
                 override fun onResults(results: Bundle?) {
                     val t = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
                     if (t != null) onText(t) else onStatus("I didn't catch that.")
                 }
-                override fun onError(error: Int) { onStatus("I didn't catch that. Try again.") }
+                override fun onError(error: Int) { onStatus("Voice error $error. 9=mic permission, 7=no speech heard, 2/5=internet, 12/13=speech service missing") }
                 override fun onReadyForSpeech(params: Bundle?) { onStatus("Listening...") }
                 override fun onBeginningOfSpeech() {}
                 override fun onRmsChanged(rmsdB: Float) {}
