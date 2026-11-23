@@ -224,13 +224,14 @@ class JarvisEngine(private val ctx: Context, private val say: (String) -> Unit) 
 
     private val appAliases = mapOf(
         "insta" to "instagram", "yt" to "youtube", "you tube" to "youtube",
-        "fb" to "facebook", "gpay" to "googlepay", "maps" to "maps",
-        "mail" to "gmail", "camera" to "camera", "playstore" to "googleplay"
+        "fb" to "facebook", "gpay" to "googlepay", "google play" to "play store",
+        "playstore" to "play store", "play store" to "play store",
+        "maps" to "maps", "mail" to "gmail", "camera" to "camera"
     )
 
     private val knownAppPackages = mapOf(
         "youtube" to listOf("com.google.android.youtube"),
-        "googleplay" to listOf("com.android.vending"),
+        "play store" to listOf("com.android.vending"),
         "chrome" to listOf("com.android.chrome", "com.chrome.beta"),
         "gmail" to listOf("com.google.android.gm"),
         "maps" to listOf("com.google.android.apps.maps"),
@@ -240,22 +241,45 @@ class JarvisEngine(private val ctx: Context, private val say: (String) -> Unit) 
         "spotify" to listOf("com.spotify.music")
     )
 
+    private fun appDistance(a: String, b: String): Int {
+        var previous = IntArray(b.length + 1) { it }
+        for (i in a.indices) {
+            val current = IntArray(b.length + 1)
+            current[0] = i + 1
+            for (j in b.indices) {
+                val cost = if (a[i] == b[j]) 0 else 1
+                current[j + 1] = minOf(current[j] + 1, previous[j + 1] + 1, previous[j] + cost)
+            }
+            previous = current
+        }
+        return previous[b.length]
+    }
+
     private fun openApp(appName: String) {
         val pm = ctx.packageManager
-        val wanted = norm(appName).let { appAliases[it] ?: it }
-        val known = knownAppPackages[wanted]?.firstNotNullOfOrNull { pm.getLaunchIntentForPackage(it) }
-        if (known != null) {
-            launch(known)
-            say("Opening $appName.")
-            return
-        }
+        val raw = appName.trim().lowercase(Locale.ROOT)
+        val wanted = appAliases[raw] ?: appAliases[norm(raw)] ?: raw
         val main = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         val activities = pm.queryIntentActivities(main, PackageManager.MATCH_DEFAULT_ONLY)
-        val match = activities.firstOrNull { norm(it.loadLabel(pm).toString()) == wanted }
-            ?: activities.firstOrNull { norm(it.loadLabel(pm).toString()).contains(wanted) }
+        // Search every launchable app installed on this phone, not just a hardcoded app list.
+        val labels = activities.map { it to norm(it.loadLabel(pm).toString()) }
+        val target = norm(wanted)
+        val exact = labels.firstOrNull { it.second == target }
+        val partial = labels.firstOrNull { it.second.startsWith(target) || target.startsWith(it.second) }
+        val fuzzy = if (target.length >= 5) {
+            labels.map { it to appDistance(target, it.second) }
+                .filter { it.second <= if (target.length >= 8) 2 else 1 }
+                .minByOrNull { it.second }?.first
+        } else null
+        val match = exact?.first ?: partial?.first ?: fuzzy?.first
         val intent = match?.let { pm.getLaunchIntentForPackage(it.activityInfo.packageName) }
-        if (intent != null) { launch(intent); say("Opening ${match.loadLabel(pm)}.") }
-        else say("I couldn't find an app called $appName on this phone.")
+            ?: knownAppPackages[wanted]?.firstNotNullOfOrNull { pm.getLaunchIntentForPackage(it) }
+        if (intent != null) {
+            launch(intent)
+            say("Opening ${match?.loadLabel(pm) ?: appName}.")
+        } else {
+            say("I couldn't find an installed app called $appName. Check the app name or install it first.")
+        }
     }
 
     private fun setAlarm(h: Int, m: Int) {
