@@ -149,10 +149,11 @@ class JarvisEngine(private val ctx: Context, private val say: (String) -> Unit) 
             try {
                 // the tap is only allowed inside WhatsApp itself, never in another app
                 if (svc() != null) JarvisAccessibilityService.run(
-                    listOf(Step(listOf("send"), exact = true, viewIdSuffix = "send")), setOf(pkg)
+                    listOf(Step(listOf("send"), exact = true, viewIdSuffix = "send", requiredText = message, requiredRecipient = fullName)),
+                    setOf(pkg)
                 )
                 launch(Intent(Intent.ACTION_VIEW, uri).setPackage(pkg))
-                say(if (svc() != null) "Sending to $fullName." else "Opened chat with $fullName. Turn on Jarvis in Accessibility to send automatically.")
+                say(if (svc() != null) "Opening the chat with $fullName. I'll send only after checking the chat and message on screen." else "Opened chat with $fullName. Turn on Jarvis in Accessibility to send automatically.")
                 return
             } catch (e: ActivityNotFoundException) {
                 JarvisAccessibilityService.cancel()
@@ -174,19 +175,17 @@ class JarvisEngine(private val ctx: Context, private val say: (String) -> Unit) 
         }
     }
 
-    /** Telegram / Instagram / Signal / Messenger: share the text, pick the person, tap Send. Best effort. */
+    /**
+     * Telegram / Instagram / Signal / Messenger have no reliable way to pick one person and press Send,
+     * so Jarvis opens the app with your message ready and YOU choose the person and tap Send.
+     */
     private fun sendViaShare(c: Command.SendMessage) {
         val pkg = sharePackages[c.app] ?: run { say("I don't support ${c.app} yet."); return }
-        needService {
-            val i = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, c.message).setPackage(pkg)
-            try {
-                JarvisAccessibilityService.run(listOf(Step(listOf(c.name)), Step(listOf("send"), exact = true)), setOf(pkg))
-                launch(i)
-                say("Trying to send to ${c.name} on ${c.app}. Please check it went to the right person.")
-            } catch (e: ActivityNotFoundException) {
-                JarvisAccessibilityService.cancel()
-                say("${c.app} is not installed.")
-            }
+        try {
+            launch(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, c.message).setPackage(pkg))
+            say("Opened ${c.app} with your message. Choose ${c.name} and tap Send yourself; I won't guess the recipient.")
+        } catch (e: ActivityNotFoundException) {
+            say("${c.app} is not installed.")
         }
     }
 
