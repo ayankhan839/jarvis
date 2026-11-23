@@ -323,7 +323,9 @@ class JarvisEngine(private val ctx: Context, private val say: (String) -> Unit) 
             }
         }
 
-        val wanted = normalizeContactName(name)
+        // A four-digit suffix lets the user distinguish contacts with identical names.
+        val suffixMatch = Regex("""^(.+?)\s+(\d{4})$""").find(name.trim())
+        val wanted = normalizeContactName(suffixMatch?.groupValues?.get(1) ?: name)
         if (wanted.isBlank()) {
             say("Please say the contact name again.")
             return null
@@ -353,16 +355,28 @@ class JarvisEngine(private val ctx: Context, private val say: (String) -> Unit) 
             score?.let { Match(person, it) }
         }.sortedBy { it.score }
 
-        if (matches.isEmpty()) {
+        val candidates = if (suffixMatch != null) {
+            val lastFour = suffixMatch.groupValues[2]
+            matches.filter { match ->
+                match.rows.any { it.number.filter(Char::isDigit).takeLast(4) == lastFour }
+            }
+        } else matches
+
+        if (candidates.isEmpty()) {
             say("I couldn't find $name in your contacts. Please say the name again.")
             return null
         }
 
-        val bestScore = matches.first().score
-        val best = matches.filter { it.score == bestScore }
+        val bestScore = candidates.first().score
+        val best = candidates.filter { it.score == bestScore }
         if (best.size != 1) {
-            val names = best.map { it.rows.first().name }.distinct().take(5)
-            say("I found multiple matching contacts: ${names.joinToString(", ")}. Please say the full name.")
+            val options = best.take(5).mapIndexed { index, match ->
+                val row = match.rows.firstOrNull { it.mobile && it.number.isNotBlank() }
+                    ?: match.rows.firstOrNull { it.number.isNotBlank() }
+                val ending = row?.number?.filter(Char::isDigit)?.takeLast(4) ?: "unknown"
+                "${index + 1}: ${match.rows.first().name}, number ending ${ending}"
+            }
+            say("I found multiple matching contacts: ${options.joinToString(". ")}. Say the contact name followed by the last four digits shown. No call or message will start until the contact is unique.")
             return null
         }
 
