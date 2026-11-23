@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.AlarmClock
 import android.provider.ContactsContract
+import android.provider.ContactsContract.CommonDataKinds.Phone
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -245,16 +246,15 @@ class JarvisEngine(private val ctx: Context, private val say: (String) -> Unit) 
      */
     private fun contactOrNull(name: String): Pair<String, String>? {
         if (!has(Manifest.permission.READ_CONTACTS)) { say("Allow contacts permission in the Jarvis app first."); return null }
-        val P = ContactsContract.CommonDataKinds.Phone
         data class Row(val id: Long, val name: String, val number: String, val mobile: Boolean)
         val rows = mutableListOf<Row>()
         ctx.contentResolver.query(
-            P.CONTENT_URI,
-            arrayOf(P.CONTACT_ID, P.DISPLAY_NAME, P.NUMBER, P.TYPE),
-            "${P.DISPLAY_NAME} LIKE ?", arrayOf("%$name%"), null
+            Phone.CONTENT_URI,
+            arrayOf(Phone.CONTACT_ID, Phone.DISPLAY_NAME, Phone.NUMBER, Phone.TYPE),
+            "${Phone.DISPLAY_NAME} LIKE ?", arrayOf("%$name%"), null
         )?.use {
             while (it.moveToNext()) {
-                rows.add(Row(it.getLong(0), it.getString(1).orEmpty(), it.getString(2).orEmpty(), it.getInt(3) == P.TYPE_MOBILE))
+                rows.add(Row(it.getLong(0), it.getString(1).orEmpty(), it.getString(2).orEmpty(), it.getInt(3) == Phone.TYPE_MOBILE))
             }
         }
         if (rows.isEmpty()) { say("I couldn't find $name in your contacts."); return null }
