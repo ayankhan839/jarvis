@@ -248,34 +248,86 @@ class JarvisEngine(private val ctx: Context, private val say: (String) -> Unit) 
      * instead of guessing. Prefers an exact name match and a mobile number.
      */
     private fun contactOrNull(name: String): Pair<String, String>? {
-        if (!has(Manifest.permission.READ_CONTACTS)) { say("Allow contacts permission in the Jarvis app first."); return null }
+        if (!has(Manifest.permission.READ_CONTACTS)) {
+            say("Allow contacts permission in the Jarvis app first.")
+            return null
+        }
+
         data class Row(val id: Long, val name: String, val number: String, val mobile: Boolean)
         val rows = mutableListOf<Row>()
         ctx.contentResolver.query(
             Phone.CONTENT_URI,
             arrayOf(Phone.CONTACT_ID, Phone.DISPLAY_NAME, Phone.NUMBER, Phone.TYPE),
-            "${Phone.DISPLAY_NAME} LIKE ?", arrayOf("%$name%"), null
-        )?.use {
-            while (it.moveToNext()) {
-                rows.add(Row(it.getLong(0), it.getString(1).orEmpty(), it.getString(2).orEmpty(), it.getInt(3) == Phone.TYPE_MOBILE))
+            null, null, null
+        )?.use { cursor ->
+            while (cursor.moveToNext()) {
+                rows.add(Row(cursor.getLong(0), cursor.getString(1).orEmpty(),
+                    cursor.getString(2).orEmpty(), cursor.getInt(3) == Phone.TYPE_MOBILE))
             }
         }
-        if (rows.isEmpty()) { say("I couldn't find $name in your contacts."); return null }
 
-        val people = rows.groupBy { it.id }.values.toList()
-        val exact = people.filter { it.first().name.equals(name, ignoreCase = true) }
-        val pick = when {
-            exact.size == 1 -> exact.first()
-            people.size == 1 -> people.first()
-            else -> {
-                val names = people.map { it.first().name }.take(4).joinToString(", ")
-                say("I found ${people.size} contacts: $names. Please say the full name.")
-                return null
-            }
+        val wanted = normalizeContactName(name)
+        if (wanted.isBlank()) {
+            say("Please say the contact name again.")
+            return null
         }
-        val best = pick.firstOrNull { it.mobile && it.number.isNotBlank() } ?: pick.firstOrNull { it.number.isNotBlank() }
-        if (best == null) { say("${pick.first().name} has no phone number saved."); return null }
-        return best.name to best.number
+
+        data class Match(val rows: List<Row>, val score: Int)
+        val matches = rows.groupBy { it.id }.values.mapNotNull { person ->
+            val actual = normalizeContactName(person.first().name)
+            val score = when {
+                actual == wanted -> 0
+                actual.contains(wanted) || wanted.contains(actual) -> 2
+                wanted.contains(" ") -> null
+                else -> {
+                    val distance = actual.split(" ").minOfOrNull { editDistance(wanted, it) } ?: 99
+                    if (distance <= if (wanted.length >= 7) 2 else 1) 10 + distance else null
+                }
+            }
+            score?.let { Match(person, it) }
+        }.sortedBy { it.score }
+
+        if (matches.isEmpty()) {
+            say("I couldn't find $name in your contacts. Please say the name again.")
+            return null
+        }
+
+        val bestScore = matches.first().score
+        val best = matches.filter { it.score == bestScore }
+        if (best.size != 1) {
+            val names = best.map { it.rows.first().name }.distinct().take(5)
+            say("I found multiple matching contacts: ${names.joinToString(", ")}. Please say the full name.")
+            return null
+        }
+
+        val person = best.first().rows
+        val number = person.firstOrNull { it.mobile && it.number.isNotBlank() }
+            ?: person.firstOrNull { it.number.isNotBlank() }
+        if (number == null) {
+            say("${person.first().name} has no phone number saved.")
+            return null
+        }
+        return number.name to number.number
+    }
+
+    private fun normalizeContactName(value: String): String =
+        value.lowercase(Locale.ROOT)
+            .filter { it.isLetterOrDigit() || it.isWhitespace() }
+            .trim()
+            .replace(Regex("\\s+"), " ")
+
+    private fun editDistance(a: String, b: String): Int {
+        var previous = IntArray(b.length + 1) { it }
+        for (i in a.indices) {
+            val current = IntArray(b.length + 1)
+            current[0] = i + 1
+            for (j in b.indices) {
+                val cost = if (a[i] == b[j]) 0 else 1
+                current[j + 1] = minOf(current[j] + 1, previous[j + 1] + 1, previous[j] + cost)
+            }
+            previous = current
+        }
+        return previous[b.length]
     }
 
     /** International format (+country code). Numbers saved with a + keep their own country; others use this phone's country. */
