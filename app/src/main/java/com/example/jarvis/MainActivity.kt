@@ -10,6 +10,7 @@ import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -24,14 +25,37 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val prefs = getSharedPreferences("jarvis", MODE_PRIVATE)
 
         status = TextView(this).apply {
-            text = "1) Allow permissions\n2) Tap \"Turn on Jarvis\" and enable it\n3) Two blue buttons float over every app:\n   J = speak a command, KB = type a command.\n\nTry: \"open YouTube\", \"call Mom\",\n\"send hey to Rahul\", \"scroll down\""
-            textSize = 16f
+            text = "HANDS-FREE: paste your free Picovoice key below, tap Start, then just say \"Jarvis\" and your command, e.g. \"Jarvis ... open YouTube\"."
+            textSize = 15f
             gravity = Gravity.CENTER
         }
+        val keyInput = EditText(this).apply {
+            hint = "Picovoice AccessKey (free: console.picovoice.ai)"
+            setSingleLine()
+            setText(prefs.getString("pv_key", ""))
+        }
+        val startWake = Button(this).apply {
+            text = "Start hands-free (say \"Jarvis\")"
+            setOnClickListener {
+                val k = keyInput.text.toString().trim()
+                if (k.isEmpty()) { status.text = "Paste your Picovoice AccessKey first."; return@setOnClickListener }
+                prefs.edit().putString("pv_key", k).apply()
+                startForegroundService(Intent(this@MainActivity, WakeService::class.java))
+                status.text = "Hands-free is ON. Say \"Jarvis\", wait for the beep, then say your command."
+            }
+        }
+        val stopWake = Button(this).apply {
+            text = "Stop hands-free"
+            setOnClickListener {
+                stopService(Intent(this@MainActivity, WakeService::class.java))
+                status.text = "Hands-free is OFF."
+            }
+        }
         val input = EditText(this).apply {
-            hint = "Type a command here (no voice needed)"
+            hint = "Or type a command here"
             setSingleLine()
             imeOptions = EditorInfo.IME_ACTION_GO
         }
@@ -48,12 +72,14 @@ class MainActivity : AppCompatActivity() {
             text = "Turn on Jarvis (Accessibility)"
             setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
         }
-        setContentView(LinearLayout(this).apply {
+        val column = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(48, 48, 48, 48)
-            addView(status); addView(input); addView(run); addView(talk); addView(access)
-        })
+            addView(status); addView(keyInput); addView(startWake); addView(stopWake)
+            addView(input); addView(run); addView(talk); addView(access)
+        }
+        setContentView(ScrollView(this).apply { addView(column) })
 
         tts = TextToSpeech(this) { if (it == TextToSpeech.SUCCESS) tts.language = Locale.getDefault() }
         engine = JarvisEngine(this) { msg ->
@@ -66,7 +92,8 @@ class MainActivity : AppCompatActivity() {
             this,
             arrayOf(
                 Manifest.permission.RECORD_AUDIO, Manifest.permission.READ_CONTACTS,
-                Manifest.permission.CALL_PHONE, Manifest.permission.SEND_SMS
+                Manifest.permission.CALL_PHONE, Manifest.permission.SEND_SMS,
+                Manifest.permission.POST_NOTIFICATIONS
             ), 1
         )
     }
