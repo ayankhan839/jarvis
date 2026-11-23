@@ -22,7 +22,13 @@ import android.widget.Toast
 import java.util.Locale
 
 /** One thing to tap on screen: matches text / content-description (or a view id). */
-data class Step(val labels: List<String>, val exact: Boolean = false, val viewIdSuffix: String? = null)
+data class Step(
+    val labels: List<String>,
+    val exact: Boolean = false,
+    val viewIdSuffix: String? = null,
+    val requiredText: String? = null,        // message must be in a text box before we tap Send
+    val requiredRecipient: String? = null    // contact name must be visible (chat header) before we tap Send
+)
 
 /**
  * Jarvis' "hands". Shows two floating buttons over every app:
@@ -40,7 +46,7 @@ class JarvisAccessibilityService : AccessibilityService() {
 
         /** Queue steps to perform as screens appear (15 s window), only inside the given app packages. */
         fun run(list: List<Step>, packages: Set<String>? = null) {
-            steps = list; allowed = packages; deadline = System.currentTimeMillis() + 15_000
+            steps = list; allowed = packages; deadline = System.currentTimeMillis() + 20_000
         }
         fun cancel() { steps = emptyList(); allowed = null }
     }
@@ -144,10 +150,18 @@ class JarvisAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val list = steps
         if (list.isEmpty()) return
-        if (System.currentTimeMillis() > deadline) { cancel(); return }
+        if (System.currentTimeMillis() > deadline) {
+            cancel()
+            Toast.makeText(this, "Jarvis could not verify the chat and message. Nothing was sent automatically.", Toast.LENGTH_LONG).show()
+            return
+        }
         val root = rootInActiveWindow ?: return
         allowed?.let { a -> if (root.packageName?.toString() !in a) return }   // never tap inside a different app
-        val node = findNode(root, list.first()) ?: return
+        val step = list.first()
+        // only tap Send after the right person's chat AND the right message are on screen
+        step.requiredRecipient?.let { r -> if (!hasVisibleLabel(root, r)) return }
+        step.requiredText?.let { m -> if (!collectEditableText(root).contains(m, ignoreCase = true)) return }
+        val node = findNode(root, step) ?: return
         if (clickNodeOrParent(node)) steps = list.drop(1)
     }
 
@@ -191,6 +205,24 @@ class JarvisAccessibilityService : AccessibilityService() {
                 else t.contains(l, true) || d.contains(l, true)
             }
         }
+    }
+
+    private fun hasVisibleLabel(root: AccessibilityNodeInfo, expected: String): Boolean =
+        dfs(root) { n ->
+            (n.text?.toString().orEmpty().contains(expected, true)) ||
+            (n.contentDescription?.toString().orEmpty().contains(expected, true))
+        } != null
+
+    /** Text of editable fields only, so an old chat message can't satisfy the check. */
+    private fun collectEditableText(root: AccessibilityNodeInfo): String {
+        val parts = mutableListOf<String>()
+        fun visit(n: AccessibilityNodeInfo?) {
+            if (n == null) return
+            if (n.isEditable) n.text?.toString()?.takeIf { it.isNotBlank() }?.let { parts.add(it) }
+            for (i in 0 until n.childCount) visit(n.getChild(i))
+        }
+        visit(root)
+        return parts.joinToString(" ")
     }
 
     private fun findEditable(root: AccessibilityNodeInfo) = dfs(root) { it.isEditable }
