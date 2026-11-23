@@ -159,8 +159,8 @@ class JarvisAccessibilityService : AccessibilityService() {
         allowed?.let { a -> if (root.packageName?.toString() !in a) return }   // never tap inside a different app
         val step = list.first()
         // only tap Send after the right person's chat AND the right message are on screen
-        step.requiredRecipient?.let { r -> if (!hasVisibleLabel(root, r)) return }
-        step.requiredText?.let { m -> if (!collectEditableText(root).contains(m, ignoreCase = true)) return }
+        step.requiredRecipient?.let { expected -> if (!hasVisibleLabel(root, expected)) return }
+        step.requiredText?.let { expected -> if (!hasEditableText(root, expected)) return }
         val node = findNode(root, step) ?: return
         if (clickNodeOrParent(node)) steps = list.drop(1)
     }
@@ -209,21 +209,13 @@ class JarvisAccessibilityService : AccessibilityService() {
 
     private fun hasVisibleLabel(root: AccessibilityNodeInfo, expected: String): Boolean =
         dfs(root) { n ->
-            (n.text?.toString().orEmpty().contains(expected, true)) ||
-            (n.contentDescription?.toString().orEmpty().contains(expected, true))
+            n.text?.toString()?.trim()?.equals(expected.trim(), ignoreCase = true) == true ||
+                n.contentDescription?.toString()?.trim()?.equals(expected.trim(), ignoreCase = true) == true
         } != null
 
-    /** Text of editable fields only, so an old chat message can't satisfy the check. */
-    private fun collectEditableText(root: AccessibilityNodeInfo): String {
-        val parts = mutableListOf<String>()
-        fun visit(n: AccessibilityNodeInfo?) {
-            if (n == null) return
-            if (n.isEditable) n.text?.toString()?.takeIf { it.isNotBlank() }?.let { parts.add(it) }
-            for (i in 0 until n.childCount) visit(n.getChild(i))
-        }
-        visit(root)
-        return parts.joinToString(" ")
-    }
+    /** Only the composer field can authorize Send; old messages elsewhere on screen do not count. */
+    private fun hasEditableText(root: AccessibilityNodeInfo, expected: String): Boolean =
+        dfs(root) { n -> n.isEditable && n.text?.toString()?.trim() == expected.trim() } != null
 
     private fun findEditable(root: AccessibilityNodeInfo) = dfs(root) { it.isEditable }
     private fun findScrollable(root: AccessibilityNodeInfo) = dfs(root) { it.isScrollable }
