@@ -36,9 +36,13 @@ class JarvisAccessibilityService : AccessibilityService() {
         @Volatile private var steps: List<Step> = emptyList()
         @Volatile private var deadline = 0L
 
-        /** Queue steps to perform automatically as screens appear (15 s window). */
-        fun run(list: List<Step>) { steps = list; deadline = System.currentTimeMillis() + 15_000 }
-        fun cancel() { steps = emptyList() }
+        @Volatile private var allowed: Set<String>? = null
+
+        /** Queue steps to perform as screens appear (15 s window), only inside the given app packages. */
+        fun run(list: List<Step>, packages: Set<String>? = null) {
+            steps = list; allowed = packages; deadline = System.currentTimeMillis() + 15_000
+        }
+        fun cancel() { steps = emptyList(); allowed = null }
     }
 
     private var tts: TextToSpeech? = null
@@ -140,8 +144,9 @@ class JarvisAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val list = steps
         if (list.isEmpty()) return
-        if (System.currentTimeMillis() > deadline) { steps = emptyList(); return }
+        if (System.currentTimeMillis() > deadline) { cancel(); return }
         val root = rootInActiveWindow ?: return
+        allowed?.let { a -> if (root.packageName?.toString() !in a) return }   // never tap inside a different app
         val node = findNode(root, list.first()) ?: return
         if (clickNodeOrParent(node)) steps = list.drop(1)
     }
