@@ -318,6 +318,11 @@ object CommandParser {
             return Command.Home
         }
 
+        // Handle a compound YouTube command before the generic "open app" rule.
+        r("""^open\s+(?:youtube|you\s+tube|yt)\s+and\s+(?:start|play)\s+(.+)$""").find(t)?.let {
+            return Command.PlayYoutube(it.groupValues[1].trim())
+        }
+
         r(
             """^open\s+(.+)$"""
         ).find(t)?.let {

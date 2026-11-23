@@ -64,7 +64,13 @@ class VoiceListener(
             setRecognitionListener(object : RecognitionListener {
                 override fun onResults(results: Bundle?) {
                     val choices = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
-                    val best = choices.firstOrNull { CommandParser.parse(it) != Command.Unknown } ?: choices.firstOrNull()
+                    val confidence = results?.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES)
+                    // Prefer the recognizer's highest-confidence alternative, not any lower-ranked
+                    // alternative that happens to match a broad command pattern.
+                    val bestIndex = if (confidence != null && confidence.size == choices.size) {
+                        confidence.indices.maxByOrNull { confidence[it] } ?: 0
+                    } else 0
+                    val best = choices.getOrNull(bestIndex)
                     if (best != null) onText(best) else onStatus("I didn't catch that.")
                     onFinished()
                 }
@@ -217,18 +223,63 @@ class JarvisEngine(private val ctx: Context, private val say: (String) -> Unit) 
     private fun norm(s: String) = s.lowercase().filter { it.isLetterOrDigit() }
 
     private val appAliases = mapOf(
-        "insta" to "instagram", "yt" to "youtube", "fb" to "facebook",
-        "gpay" to "googlepay", "maps" to "maps", "mail" to "gmail", "camera" to "camera"
+        "insta" to "instagram", "yt" to "youtube", "you tube" to "youtube",
+        "fb" to "facebook", "gpay" to "googlepay", "google play" to "play store",
+        "playstore" to "play store", "play store" to "play store",
+        "maps" to "maps", "mail" to "gmail", "camera" to "camera"
     )
+
+    private val knownAppPackages = mapOf(
+        "youtube" to listOf("com.google.android.youtube"),
+        "play store" to listOf("com.android.vending"),
+        "chrome" to listOf("com.android.chrome", "com.chrome.beta"),
+        "gmail" to listOf("com.google.android.gm"),
+        "maps" to listOf("com.google.android.apps.maps"),
+        "whatsapp" to listOf("com.whatsapp", "com.whatsapp.w4b"),
+        "instagram" to listOf("com.instagram.android"),
+        "facebook" to listOf("com.facebook.katana"),
+        "spotify" to listOf("com.spotify.music")
+    )
+
+    private fun appDistance(a: String, b: String): Int {
+        var previous = IntArray(b.length + 1) { it }
+        for (i in a.indices) {
+            val current = IntArray(b.length + 1)
+            current[0] = i + 1
+            for (j in b.indices) {
+                val cost = if (a[i] == b[j]) 0 else 1
+                current[j + 1] = minOf(current[j] + 1, previous[j + 1] + 1, previous[j] + cost)
+            }
+            previous = current
+        }
+        return previous[b.length]
+    }
 
     private fun openApp(appName: String) {
         val pm = ctx.packageManager
+        val raw = appName.trim().lowercase(Locale.ROOT)
+        val wanted = appAliases[raw] ?: appAliases[norm(raw)] ?: raw
         val main = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        val wanted = norm(appName).let { appAliases[it] ?: it }   // "playstore" matches "Play Store"
-        val match = pm.queryIntentActivities(main, 0).firstOrNull { norm(it.loadLabel(pm).toString()).contains(wanted) }
+        val activities = pm.queryIntentActivities(main, PackageManager.MATCH_DEFAULT_ONLY)
+        // Search every launchable app installed on this phone, not just a hardcoded app list.
+        val labels = activities.map { it to norm(it.loadLabel(pm).toString()) }
+        val target = norm(wanted)
+        val exact = labels.firstOrNull { it.second == target }
+        val partial = labels.firstOrNull { it.second.startsWith(target) || target.startsWith(it.second) }
+        val fuzzy = if (target.length >= 5) {
+            labels.map { it to appDistance(target, it.second) }
+                .filter { it.second <= if (target.length >= 8) 2 else 1 }
+                .minByOrNull { it.second }?.first
+        } else null
+        val match = exact?.first ?: partial?.first ?: fuzzy?.first
         val intent = match?.let { pm.getLaunchIntentForPackage(it.activityInfo.packageName) }
-        if (intent != null) { launch(intent); say("Opening ${match.loadLabel(pm)}.") }
-        else say("I couldn't find an app called $appName on this phone.")
+            ?: knownAppPackages[wanted]?.firstNotNullOfOrNull { pm.getLaunchIntentForPackage(it) }
+        if (intent != null) {
+            launch(intent)
+            say("Opening ${match?.loadLabel(pm) ?: appName}.")
+        } else {
+            say("I couldn't find an installed app called $appName. Check the app name or install it first.")
+        }
     }
 
     private fun setAlarm(h: Int, m: Int) {
@@ -279,15 +330,24 @@ class JarvisEngine(private val ctx: Context, private val say: (String) -> Unit) 
         }
 
         data class Match(val rows: List<Row>, val score: Int)
+        val wantedTokens = wanted.split(" ").filter { it.isNotBlank() }
         val matches = rows.groupBy { it.id }.values.mapNotNull { person ->
             val actual = normalizeContactName(person.first().name)
+            val actualTokens = actual.split(" ").filter { it.isNotBlank() }
             val score = when {
                 actual == wanted -> 0
-                actual.contains(wanted) || wanted.contains(actual) -> 2
-                wanted.contains(" ") -> null
+                actualTokens.containsAll(wantedTokens) -> 1
                 else -> {
-                    val distance = actual.split(" ").minOfOrNull { editDistance(wanted, it) } ?: 99
-                    if (distance <= if (wanted.length >= 7) 2 else 1) 10 + distance else null
+                    val maxDistance = if (wantedTokens.any { it.length >= 7 }) 2 else 1
+                    val distances = wantedTokens.map { spokenToken ->
+                        actualTokens.map { editDistance(spokenToken, it) }.minOrNull() ?: 99
+                    }
+                    if (distances.isNotEmpty() && distances.all { it <= maxDistance }) {
+                        5 + distances.sum() + (actualTokens.size - wantedTokens.size).coerceAtLeast(0)
+                    } else if (wantedTokens.size == 1) {
+                        val close = actualTokens.map { editDistance(wantedTokens[0], it) }.minOrNull() ?: 99
+                        if (close <= maxDistance) 10 + close else null
+                    } else null
                 }
             }
             score?.let { Match(person, it) }
