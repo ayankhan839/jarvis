@@ -194,15 +194,18 @@ class JarvisEngine(private val ctx: Context, private val say: (String) -> Unit) 
     private fun call(name: String) {
         val (fullName, number) = contactOrNull(name) ?: return
         val uri = Uri.parse("tel:" + Uri.encode(number))
-        if (has(Manifest.permission.CALL_PHONE)) {
-            try {
-                launch(Intent(Intent.ACTION_CALL, uri))
-                say("Calling $fullName.")
-                return
-            } catch (e: SecurityException) { /* fall through to the dialer */ }
+        if (!has(Manifest.permission.CALL_PHONE)) {
+            say("Phone permission is required to call automatically. Allow it in Android Settings > Apps > Jarvis > Permissions.")
+            return
         }
-        launch(Intent(Intent.ACTION_DIAL, uri))
-        say("Opened the dialer for $fullName. Allow Phone permission in the Jarvis app to call automatically.")
+        try {
+            launch(Intent(Intent.ACTION_CALL, uri))
+            say("Calling $fullName.")
+        } catch (e: SecurityException) {
+            say("Android blocked the call. Check Jarvis Phone permission and try again.")
+        } catch (e: ActivityNotFoundException) {
+            say("No phone app is available to place this call.")
+        }
     }
 
     private fun norm(s: String) = s.lowercase().filter { it.isLetterOrDigit() }
