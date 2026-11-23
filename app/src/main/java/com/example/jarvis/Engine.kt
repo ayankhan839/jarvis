@@ -63,8 +63,9 @@ class VoiceListener(
         rec = SpeechRecognizer.createSpeechRecognizer(ctx).apply {
             setRecognitionListener(object : RecognitionListener {
                 override fun onResults(results: Bundle?) {
-                    val t = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-                    if (t != null) onText(t) else onStatus("I didn't catch that.")
+                    val choices = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
+                    val best = choices.firstOrNull { CommandParser.parse(it) != Command.Unknown } ?: choices.firstOrNull()
+                    if (best != null) onText(best) else onStatus("I didn't catch that.")
                     onFinished()
                 }
                 override fun onError(error: Int) {
@@ -82,7 +83,12 @@ class VoiceListener(
             })
             startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                if (lang != null) putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang)
+                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
+                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, lang ?: Locale.getDefault().toLanguageTag())
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L)
+                putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 900L)
             })
         }
     }
